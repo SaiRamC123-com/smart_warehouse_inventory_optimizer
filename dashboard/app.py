@@ -1,8 +1,13 @@
-import sys, os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import sys
+import os
+
+# Fix import paths for Streamlit Cloud
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 from src.data_loader import load_data, get_product_summary
 from src.inventory_analysis import enrich_summary
 from src.visualizations import (
@@ -10,7 +15,7 @@ from src.visualizations import (
     stock_vs_rop_bar, stock_value_treemap, category_demand_bar
 )
 
-# ── Page config ──────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="Smart Warehouse Optimizer",
     page_icon="🏭",
@@ -38,22 +43,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Load Data ─────────────────────────────────────────────────
+DATA_PATH = os.path.join(BASE_DIR, "data", "inventory_demand_forecasting_dataset.csv")
+
 @st.cache_data
-def load_all():
-    df = load_data("data/inventory_data.csv")
+def load_all(path):
+    df = load_data(path)
     summary = get_product_summary(df)
     return df, summary
 
-df, summary = load_all()
+try:
+    df, summary = load_all(DATA_PATH)
+except FileNotFoundError:
+    st.error("❌ Dataset not found! Make sure `data/inventory_demand_forecasting_dataset.csv` is in your GitHub repo.")
+    st.stop()
 
 # ── Sidebar ───────────────────────────────────────────────────
-st.sidebar.image("https://img.icons8.com/fluency/96/warehouse.png", width=80)
 st.sidebar.title("⚙️ Settings")
 
 service_level = st.sidebar.selectbox(
     "Service Level", ["90%", "95%", "99%"], index=1,
     help="Higher service level → more safety stock buffered"
 )
+
 category_filter = st.sidebar.multiselect(
     "Filter by Category",
     options=df["category"].unique().tolist(),
@@ -70,29 +81,39 @@ st.caption("Pragyan AI Hackathon | Real-time Stock Intelligence Dashboard")
 
 # ── KPI Row ───────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
-total_products   = len(enriched_filtered)
-out_of_stock     = (enriched_filtered["status"] == "🔴 OUT OF STOCK").sum()
-critical         = (enriched_filtered["status"] == "🟠 CRITICAL").sum()
-reorder_needed   = (enriched_filtered["status"] == "🟡 REORDER NOW").sum()
-total_stock_val  = enriched_filtered["stock_value"].sum()
 
-k1.metric("📦 Total Products",   total_products)
-k2.metric("🔴 Out of Stock",     out_of_stock,    delta=f"-{out_of_stock}" if out_of_stock else None, delta_color="inverse")
-k3.metric("🟠 Critical Stock",   critical,        delta=f"-{critical}" if critical else None, delta_color="inverse")
-k4.metric("🟡 Reorder Needed",   reorder_needed)
-k5.metric("💰 Total Stock Value",f"${total_stock_val:,.0f}")
+total_products  = len(enriched_filtered)
+out_of_stock    = (enriched_filtered["status"] == "🔴 OUT OF STOCK").sum()
+critical        = (enriched_filtered["status"] == "🟠 CRITICAL").sum()
+reorder_needed  = (enriched_filtered["status"] == "🟡 REORDER NOW").sum()
+total_stock_val = enriched_filtered["stock_value"].sum()
+
+k1.metric("📦 Total Products",    total_products)
+k2.metric("🔴 Out of Stock",      out_of_stock,
+          delta=f"-{out_of_stock}" if out_of_stock else None,
+          delta_color="inverse")
+k3.metric("🟠 Critical Stock",    critical,
+          delta=f"-{critical}" if critical else None,
+          delta_color="inverse")
+k4.metric("🟡 Reorder Needed",    reorder_needed)
+k5.metric("💰 Total Stock Value", f"${total_stock_val:,.0f}")
 
 st.divider()
 
 # ── Alerts Panel ──────────────────────────────────────────────
-alerts = enriched_filtered[enriched_filtered["status"].isin(["🔴 OUT OF STOCK","🟠 CRITICAL","🟡 REORDER NOW"])]
+alerts = enriched_filtered[enriched_filtered["status"].isin([
+    "🔴 OUT OF STOCK", "🟠 CRITICAL", "🟡 REORDER NOW"
+])]
 
 if not alerts.empty:
-    with st.expander(f"🚨 Active Alerts ({len(alerts)} products need attention)", expanded=True):
+    with st.expander(
+        f"🚨 Active Alerts ({len(alerts)} products need attention)",
+        expanded=True
+    ):
         for _, row in alerts.iterrows():
-            css_class = "alert-box" if "OUT" in row["status"] or "CRITICAL" in row["status"] else "warn-box"
+            css = "alert-box" if any(x in row["status"] for x in ["OUT","CRITICAL"]) else "warn-box"
             st.markdown(
-                f'<div class="{css_class}">'
+                f'<div class="{css}">'
                 f'<b>{row["status"]} — {row["product_name"]}</b><br>'
                 f'Current Stock: <b>{int(row["current_stock"])}</b> units | '
                 f'Reorder Point: <b>{row["reorder_point"]}</b> | '
@@ -110,13 +131,13 @@ st.divider()
 # ── Charts Row 1 ──────────────────────────────────────────────
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(stock_status_pie(enriched_filtered), use_container_width=True)
+    st.plotly_chart(stock_status_pie(enriched_filtered),   use_container_width=True)
 with col2:
-    st.plotly_chart(category_demand_bar(df_filtered), use_container_width=True)
+    st.plotly_chart(category_demand_bar(df_filtered),      use_container_width=True)
 
 # ── Charts Row 2 ──────────────────────────────────────────────
-st.plotly_chart(stock_vs_rop_bar(enriched_filtered), use_container_width=True)
-st.plotly_chart(stock_value_treemap(enriched_filtered), use_container_width=True)
+st.plotly_chart(stock_vs_rop_bar(enriched_filtered),       use_container_width=True)
+st.plotly_chart(stock_value_treemap(enriched_filtered),    use_container_width=True)
 
 # ── Demand Trend ──────────────────────────────────────────────
 st.subheader("📈 Product Demand Trend")
@@ -126,13 +147,14 @@ selected_pid = st.selectbox(
     options=list(product_options.keys()),
     format_func=lambda x: f"{x} — {product_options[x]}"
 )
-st.plotly_chart(demand_trend(df_filtered, selected_pid), use_container_width=True)
+st.plotly_chart(demand_trend(df_filtered, selected_pid),   use_container_width=True)
 
 # ── Full Inventory Table ──────────────────────────────────────
 st.subheader("📋 Full Inventory Intelligence Table")
 display_cols = [
-    "product_name","category","current_stock","avg_daily_demand",
-    "safety_stock","reorder_point","eoq","days_of_stock","stock_value","status"
+    "product_name", "category", "current_stock", "avg_daily_demand",
+    "safety_stock", "reorder_point", "eoq", "days_of_stock",
+    "stock_value", "status"
 ]
 st.dataframe(
     enriched_filtered[display_cols].rename(columns={
